@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0d10'/%3E%3Cpath d='M8 16h16' stroke='%231e2329' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M16 7v18' stroke='%2334d399' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Tuner</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --fg: #e8eaed;
+    --dim: #6b7280;
+    --line: #1e2329;
+    --accent: #34d399;
+    --warn: #f0b429;
+    --bar-h: 76px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.4 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 28px;
+    padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+  .stage { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 26px; }
+
+  /* --- readout ---------------------------------------------------------- */
+  .readout { text-align: center; }
+  .note {
+    font-size: clamp(76px, 24vw, 116px); font-weight: 300; letter-spacing: -0.04em;
+    line-height: 1; font-variant-numeric: tabular-nums;
+    transition: color .18s ease; color: var(--fg);
+  }
+  .note sub { font-size: .3em; font-weight: 400; vertical-align: baseline; color: var(--dim); margin-left: .06em; }
+  .cents {
+    margin-top: 10px; font-size: 17px; color: var(--dim);
+    font-variant-numeric: tabular-nums; letter-spacing: .02em; height: 24px;
+  }
+  body[data-tuned="true"] .note { color: var(--accent); }
+  body[data-active="false"] .note { color: var(--line); }
+  body[data-active="false"] .cents { color: var(--line); }
+
+  /* --- meter ------------------------------------------------------------ */
+  .meter { position: relative; height: var(--bar-h); }
+  .track {
+    position: absolute; inset: 50% 0 auto; transform: translateY(-50%);
+    height: 2px; background: var(--line);
+  }
+  .ticks { position: absolute; inset: 0; }
+  .tick {
+    position: absolute; top: 50%; width: 1px; background: var(--line);
+    transform: translate(-50%, -50%);
+  }
+  .tick.minor { height: 12px; }
+  .tick.major { height: 22px; }
+  .detent {
+    position: absolute; left: 50%; top: 50%; width: 2px; height: var(--bar-h);
+    background: var(--line); transform: translate(-50%, -50%);
+    transition: background .18s ease, box-shadow .18s ease;
+  }
+  body[data-tuned="true"] .detent { background: var(--accent); box-shadow: 0 0 22px 2px rgba(52,211,153,.5); }
+  .needle {
+    position: absolute; top: 50%; left: 50%; width: 4px; height: calc(var(--bar-h) - 10px);
+    margin-left: -2px; border-radius: 2px; background: var(--warn);
+    transform: translate(0, -50%); will-change: transform;
+    transition: background .18s ease, opacity .25s ease;
+  }
+  body[data-tuned="true"] .needle { background: var(--accent); }
+  body[data-active="false"] .needle { opacity: 0; }
+  .dirs {
+    position: absolute; inset: auto 0 -22px; display: flex; justify-content: space-between;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--line);
+  }
+
+  /* --- strings ---------------------------------------------------------- */
+  .strings { display: flex; justify-content: center; gap: 8px; }
+  .string {
+    flex: 1; max-width: 60px; padding: 9px 0; border: 1px solid var(--line); border-radius: 8px;
+    background: none; color: var(--dim); font: inherit; font-size: 14px; text-align: center;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .string[data-on="true"] { color: var(--fg); border-color: #39414b; background: #12161b; }
+  body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: rgba(52,211,153,.45); }
+
+  /* --- footer ----------------------------------------------------------- */
+  .controls {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    font-size: 13px; color: var(--dim);
+  }
+  select, .step {
+    background: none; border: 1px solid var(--line); border-radius: 7px; color: var(--dim);
+    font: inherit; font-size: 13px; padding: 6px 8px;
+  }
+  select:focus-visible, .step:focus-visible, button:focus-visible { outline: 1px solid #39414b; outline-offset: 2px; }
+  .a4 { display: flex; align-items: center; gap: 6px; }
+  .step { width: 26px; padding: 5px 0; text-align: center; cursor: pointer; }
+  .a4 output { font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
+  .hz { text-align: center; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; height: 18px; }
+
+  /* --- start / status --------------------------------------------------- */
+  .overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; padding: 32px;
+    background: var(--bg); text-align: center; z-index: 10;
+  }
+  .overlay[hidden] { display: none; }
+  #start {
+    background: none; border: 1px solid #39414b; border-radius: 999px; color: var(--fg);
+    font: inherit; font-size: 15px; padding: 13px 30px; cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  #start:hover { border-color: var(--fg); background: #12161b; }
+  #status { color: var(--dim); font-size: 14px; max-width: 34ch; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body data-active="false" data-tuned="false">
+
+  <div class="stage">
+    <div class="readout">
+      <div class="note" id="note">&ndash;</div>
+      <div class="cents" id="cents"></div>
+    </div>
+
+    <div class="meter">
+      <div class="track"></div>
+      <div class="ticks" id="ticks"></div>
+      <div class="detent"></div>
+      <div class="needle" id="needle"></div>
+      <div class="dirs"><span>flat</span><span>sharp</span></div>
+    </div>
+
+    <div class="hz" id="hz"></div>
+
+    <div class="strings" id="strings"></div>
+
+    <div class="controls">
+      <select id="tuning" aria-label="Tuning"></select>
+      <div class="a4">
+        <button class="step" id="a4down" aria-label="Lower reference pitch">&minus;</button>
+        <output id="a4">A4 440</output>
+        <button class="step" id="a4up" aria-label="Raise reference pitch">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <button id="start">Start tuner</button>
+    <p id="status">Uses your microphone. Nothing leaves this page.</p>
+  </div>
+
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>

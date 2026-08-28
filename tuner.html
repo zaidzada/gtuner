@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0d10'/%3E%3Cpath d='M8 16h16' stroke='%231e2329' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M16 7v18' stroke='%2334d399' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Tuner</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --fg: #e8eaed;
+    --dim: #6b7280;
+    --line: #1e2329;
+    --accent: #34d399;
+    --warn: #f0b429;
+    --bar-h: 76px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.4 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 28px;
+    padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+  .stage { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 26px; }
+
+  /* --- readout ---------------------------------------------------------- */
+  .readout { text-align: center; }
+  .note {
+    font-size: clamp(76px, 24vw, 116px); font-weight: 300; letter-spacing: -0.04em;
+    line-height: 1; font-variant-numeric: tabular-nums;
+    transition: color .18s ease; color: var(--fg);
+  }
+  .note sub { font-size: .3em; font-weight: 400; vertical-align: baseline; color: var(--dim); margin-left: .06em; }
+  .cents {
+    margin-top: 10px; font-size: 17px; color: var(--dim);
+    font-variant-numeric: tabular-nums; letter-spacing: .02em; height: 24px;
+  }
+  body[data-tuned="true"] .note { color: var(--accent); }
+  body[data-active="false"] .note { color: var(--line); }
+  body[data-active="false"] .cents { color: var(--line); }
+
+  /* --- meter ------------------------------------------------------------ */
+  .meter { position: relative; height: var(--bar-h); }
+  .track {
+    position: absolute; inset: 50% 0 auto; transform: translateY(-50%);
+    height: 2px; background: var(--line);
+  }
+  .ticks { position: absolute; inset: 0; }
+  .tick {
+    position: absolute; top: 50%; width: 1px; background: var(--line);
+    transform: translate(-50%, -50%);
+  }
+  .tick.minor { height: 12px; }
+  .tick.major { height: 22px; }
+  .detent {
+    position: absolute; left: 50%; top: 50%; width: 2px; height: var(--bar-h);
+    background: var(--line); transform: translate(-50%, -50%);
+    transition: background .18s ease, box-shadow .18s ease;
+  }
+  body[data-tuned="true"] .detent { background: var(--accent); box-shadow: 0 0 22px 2px rgba(52,211,153,.5); }
+  .needle {
+    position: absolute; top: 50%; left: 50%; width: 4px; height: calc(var(--bar-h) - 10px);
+    margin-left: -2px; border-radius: 2px; background: var(--warn);
+    transform: translate(0, -50%); will-change: transform;
+    transition: background .18s ease, opacity .25s ease;
+  }
+  body[data-tuned="true"] .needle { background: var(--accent); }
+  body[data-active="false"] .needle { opacity: 0; }
+  .dirs {
+    position: absolute; inset: auto 0 -22px; display: flex; justify-content: space-between;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--line);
+  }
+
+  /* --- strings ---------------------------------------------------------- */
+  .strings { display: flex; justify-content: center; gap: 8px; }
+  .string {
+    flex: 1; max-width: 60px; padding: 9px 0; border: 1px solid var(--line); border-radius: 8px;
+    background: none; color: var(--dim); font: inherit; font-size: 14px; text-align: center;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .string[data-on="true"] { color: var(--fg); border-color: #39414b; background: #12161b; }
+  body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: rgba(52,211,153,.45); }
+
+  /* --- footer ----------------------------------------------------------- */
+  .controls {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    font-size: 13px; color: var(--dim);
+  }
+  select, .step {
+    background: none; border: 1px solid var(--line); border-radius: 7px; color: var(--dim);
+    font: inherit; font-size: 13px; padding: 6px 8px;
+  }
+  select:focus-visible, .step:focus-visible, button:focus-visible { outline: 1px solid #39414b; outline-offset: 2px; }
+  .a4 { display: flex; align-items: center; gap: 6px; }
+  .step { width: 26px; padding: 5px 0; text-align: center; cursor: pointer; }
+  .a4 output { font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
+  .hz { text-align: center; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; height: 18px; }
+
+  /* --- start / status --------------------------------------------------- */
+  .overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; padding: 32px;
+    background: var(--bg); text-align: center; z-index: 10;
+  }
+  .overlay[hidden] { display: none; }
+  #start {
+    background: none; border: 1px solid #39414b; border-radius: 999px; color: var(--fg);
+    font: inherit; font-size: 15px; padding: 13px 30px; cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  #start:hover { border-color: var(--fg); background: #12161b; }
+  #status { color: var(--dim); font-size: 14px; max-width: 34ch; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body data-active="false" data-tuned="false">
+
+  <div class="stage">
+    <div class="readout">
+      <div class="note" id="note">&ndash;</div>
+      <div class="cents" id="cents"></div>
+    </div>
+
+    <div class="meter">
+      <div class="track"></div>
+      <div class="ticks" id="ticks"></div>
+      <div class="detent"></div>
+      <div class="needle" id="needle"></div>
+      <div class="dirs"><span>flat</span><span>sharp</span></div>
+    </div>
+
+    <div class="hz" id="hz"></div>
+
+    <div class="strings" id="strings"></div>
+
+    <div class="controls">
+      <select id="tuning" aria-label="Tuning"></select>
+      <div class="a4">
+        <button class="step" id="a4down" aria-label="Lower reference pitch">&minus;</button>
+        <output id="a4">A4 440</output>
+        <button class="step" id="a4up" aria-label="Raise reference pitch">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <button id="start">Start tuner</button>
+    <p id="status">Uses your microphone. Nothing leaves this page.</p>
+  </div>
+
+<!-- Carried as inert script blocks: the browser ignores unknown types, and
+     addModule() / new Worker() need URLs, which we mint from these below. -->
+<script type="text/x-audioworklet" id="src-capture-processor">
+// AudioWorklet processor. Runs on the realtime audio thread, so it does as
+// little as possible: copy samples into a ring buffer and hand off a window
+// every HOP samples. All the actual analysis happens in a Worker.
+//
+// Buffers are recycled rather than allocated. We transfer a Float32Array out
+// to the main thread; once the Worker is done with it, it comes back here and
+// goes on the free list. After a second or so this loop allocates nothing at
+// all, which keeps the GC away from the audio thread.
+
+const FRAME = 4096;          // analysis window (~93 ms at 44.1 kHz)
+const HOP = 1024;            // emit this often (~23 ms -> ~43 updates/sec)
+const MASK = FRAME - 1;      // FRAME is a power of two
+
+class CaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ring = new Float32Array(FRAME);
+    this.idx = 0;
+    this.filled = 0;
+    this.sinceEmit = 0;
+    this.pool = [];
+    this.running = true;
+
+    this.port.onmessage = (event) => {
+      const data = event.data;
+      if (data === 'stop') {
+        this.running = false;
+      } else if (data && data.buffer instanceof ArrayBuffer) {
+        // A window came back from the Worker; reuse it.
+        if (this.pool.length < 4) this.pool.push(data);
+      }
+    };
+  }
+
+  process(inputs) {
+    if (!this.running) return false;
+
+    const channel = inputs[0] && inputs[0][0];
+    if (!channel) return true;
+
+    for (let i = 0; i < channel.length; i++) {
+      this.ring[this.idx] = channel[i];
+      this.idx = (this.idx + 1) & MASK;
+    }
+    if (this.filled < FRAME) this.filled = Math.min(FRAME, this.filled + channel.length);
+    this.sinceEmit += channel.length;
+
+    if (this.sinceEmit >= HOP && this.filled >= FRAME) {
+      this.sinceEmit = 0;
+      const out = this.pool.pop() || new Float32Array(FRAME);
+      // Linearize the ring, oldest sample first. this.idx is both the next
+      // write position and, once full, the oldest sample.
+      const head = FRAME - this.idx;
+      out.set(this.ring.subarray(this.idx), 0);
+      out.set(this.ring.subarray(0, this.idx), head);
+      this.port.postMessage(out, [out.buffer]);
+    }
+
+    return true;
+  }
+}
+
+registerProcessor('capture-processor', CaptureProcessor);
+
+</script>
+
+<script type="text/x-worker" id="src-detector-worker">
+// Worker thread. Owns the WASM instance and runs pitch detection.
+//
+// This lives off the audio thread on purpose: detect() takes ~4 ms, while an
+// AudioWorklet callback must return in under ~2.9 ms. Running it inline would
+// glitch the audio even though average CPU load is low.
+
+let exports_ = null;
+let input = null;
+let output = null;
+let memoryBuffer = null;
+
+// WebAssembly.Memory views detach if memory ever grows. We don't grow, but
+// re-deriving on change costs nothing and removes a whole class of bug.
+function views() {
+  if (memoryBuffer !== exports_.memory.buffer) {
+    memoryBuffer = exports_.memory.buffer;
+    input = new Float32Array(memoryBuffer, exports_.input_ptr(), exports_.frame_size());
+    output = new Float32Array(memoryBuffer, exports_.output_ptr(), 4);
+  }
+  return { input, output };
+}
+
+self.onmessage = async (event) => {
+  const msg = event.data;
+
+  if (msg.type === 'init') {
+    try {
+      let bytes = msg.wasmBytes;
+      if (!bytes) {
+        const response = await fetch(msg.wasmUrl);
+        if (!response.ok) throw new Error(`fetch ${msg.wasmUrl}: ${response.status}`);
+        bytes = await response.arrayBuffer();
+      }
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      exports_ = instance.exports;
+      views();
+      self.postMessage({ type: 'ready', frameSize: exports_.frame_size() });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String(err) });
+    }
+    return;
+  }
+
+  if (msg.type === 'frame') {
+    const frame = msg.frame;
+    if (!exports_) {
+      self.postMessage({ type: 'recycle', frame }, [frame.buffer]);
+      return;
+    }
+    const { input: inputView, output: outputView } = views();
+    const n = Math.min(frame.length, inputView.length);
+    inputView.set(frame.subarray(0, n));
+
+    const found = exports_.detect(n, msg.sampleRate, 0.15);
+
+    self.postMessage({
+      type: 'result',
+      found: found === 1,
+      freq: outputView[0],
+      clarity: outputView[1],
+      rms: outputView[2],
+      frame,                       // hand the buffer back for reuse
+    }, [frame.buffer]);
+  }
+};
+
+</script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Generated by tools/build-single.mjs — edit the files in src/ and wasm/, then
+// rebuild. Everything below is inlined so this page works from any static host
+// with no other files beside it.
+// ---------------------------------------------------------------------------
+
+/** wasm/yin.wasm, base64 (1847 bytes decoded) */
+const EMBEDDED_WASM = "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";
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function blobUrlFrom(elementId) {
+  const source = document.getElementById(elementId).textContent;
+  return URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+}
+
+/** Single-file replacement for src/sources.js. */
+function resolveSources() {
+  return {
+    workletUrl: blobUrlFrom('src-capture-processor'),
+    workerUrl: blobUrlFrom('src-detector-worker'),
+    wasmBytes: base64ToBytes(EMBEDDED_WASM),
+  };
+}
+
+// --- src/music.js ----------------------------------------------------------
+// Note names, tunings, and the logic that decides which string you're playing.
+
+const SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+/** "A#2" | "Eb3" | "E4"  ->  MIDI note number (A4 = 69). */
+function noteToMidi(name) {
+  const m = /^([A-G])([#b]?)(-?\d+)$/.exec(name.trim());
+  if (!m) throw new Error(`bad note name: ${name}`);
+  const [, letter, accidental, octave] = m;
+  const alter = accidental === '#' ? 1 : accidental === 'b' ? -1 : 0;
+  return 12 * (Number(octave) + 1) + SEMITONES[letter] + alter;
+}
+
+function midiToFreq(midi, a4 = 440) {
+  return a4 * Math.pow(2, (midi - 69) / 12);
+}
+
+function noteToFreq(name, a4 = 440) {
+  return midiToFreq(noteToMidi(name), a4);
+}
+
+/** Signed distance in cents. Positive = sharp. */
+function cents(freq, target) {
+  return 1200 * Math.log2(freq / target);
+}
+
+const TUNINGS = {
+  standard:  { label: 'Standard',        notes: ['E2', 'A2', 'D3', 'G3', 'B3', 'E4'] },
+  dropD:     { label: 'Drop D',          notes: ['D2', 'A2', 'D3', 'G3', 'B3', 'E4'] },
+  halfStep:  { label: 'Half step down',  notes: ['D#2', 'G#2', 'C#3', 'F#3', 'A#3', 'D#4'] },
+  wholeStep: { label: 'Whole step down', notes: ['D2', 'G2', 'C3', 'F3', 'A3', 'D4'] },
+  openD:     { label: 'Open D',          notes: ['D2', 'A2', 'D3', 'F#3', 'A3', 'D4'] },
+  openG:     { label: 'Open G',          notes: ['D2', 'G2', 'D3', 'G3', 'B3', 'D4'] },
+  dadgad:    { label: 'DADGAD',          notes: ['D2', 'A2', 'D3', 'G3', 'A3', 'D4'] },
+};
+
+/** Build the target list for a tuning at a given A4 reference. */
+function buildTargets(tuningKey, a4 = 440) {
+  return TUNINGS[tuningKey].notes.map((note, i) => ({
+    index: i,                       // 0 = lowest (6th string)
+    note,
+    label: note.replace(/-?\d+$/, ''),
+    octave: Number(/-?\d+$/.exec(note)[0]),
+    freq: noteToFreq(note, a4),
+  }));
+}
+
+/**
+ * Pick which string a frequency belongs to.
+ *
+ * Naive nearest-target matching flickers badly when you sit near the midpoint
+ * between two strings, which is exactly where you are while tuning a badly
+ * flat string. So once a string is chosen we keep it until some other target
+ * is closer by more than `hysteresis` cents.
+ */
+function matchString(freq, targets, held = null, hysteresis = 40) {
+  let best = null;
+  let bestAbs = Infinity;
+  for (const t of targets) {
+    const abs = Math.abs(cents(freq, t.freq));
+    if (abs < bestAbs) { bestAbs = abs; best = t; }
+  }
+  if (held === null) return best;
+
+  const heldTarget = targets[held.index];
+  if (!heldTarget) return best;
+  const heldAbs = Math.abs(cents(freq, heldTarget.freq));
+  return bestAbs < heldAbs - hysteresis ? best : heldTarget;
+}
+
+/** Median of a small array. Cheap outlier rejection for the frequency stream. */
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// --- src/audio.js ----------------------------------------------------------
+// Microphone capture and the worklet <-> worker plumbing.
+//
+//   mic -> AudioWorklet (ring buffer)  [audio thread]
+//            | transfer
+//          main thread (relay only)
+//            | transfer
+//          Worker -> WASM detect()     [worker thread]
+//            | result
+//          main thread -> onResult
+
+class TunerEngine {
+  /**
+   * @param {object} options
+   * @param {(result: object) => void} options.onResult
+   * @param {(state: string, detail?: string) => void} [options.onStateChange]
+   * @param {string} options.workletUrl  AudioWorklet module (a real URL or a blob: URL)
+   * @param {string} options.workerUrl   Worker script (a real URL or a blob: URL)
+   * @param {string} [options.wasmUrl]   fetched by the worker
+   * @param {Uint8Array} [options.wasmBytes]  used instead of wasmUrl when inlined
+   */
+  constructor({ onResult, onStateChange, workletUrl, workerUrl, wasmUrl, wasmBytes }) {
+    this.onResult = onResult;
+    this.onStateChange = onStateChange || (() => {});
+    this.workletUrl = workletUrl;
+    this.workerUrl = workerUrl;
+    this.wasmUrl = wasmUrl;
+    this.wasmBytes = wasmBytes;
+    this.context = null;
+    this.stream = null;
+    this.node = null;
+    this.worker = null;
+    this.state = 'idle';
+  }
+
+  setState(state, detail) {
+    this.state = state;
+    this.onStateChange(state, detail);
+  }
+
+  async start() {
+    if (this.state === 'running' || this.state === 'starting') return;
+    this.setState('starting');
+
+    // Opened straight from disk. The mic would prompt and then the worklet
+    // would fail on an opaque origin, so say why up front instead.
+    if (location.protocol === 'file:') {
+      this.setState('error',
+        'This page has to be served over http:// or https:// — browsers block audio worklets on pages opened directly from disk. Any static host works, or run "python3 -m http.server" in this folder and open localhost.');
+      return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this.setState('error', 'This browser has no microphone API. Note that microphone access requires https:// or localhost.');
+      return;
+    }
+
+    try {
+      // Browser voice processing is tuned for speech and will actively mangle
+      // a sustained guitar tone. All three must be off.
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+        },
+      });
+    } catch (err) {
+      const name = err && err.name;
+      const message =
+        name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser settings and reload.'
+        : name === 'NotFoundError' ? 'No microphone was found.'
+        : `Could not open the microphone (${name || err}).`;
+      this.setState('error', message);
+      return;
+    }
+
+    this.context = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.context.state === 'suspended') await this.context.resume();
+
+    try {
+      await this.context.audioWorklet.addModule(this.workletUrl);
+    } catch (err) {
+      this.setState('error', `Could not load the audio processor: ${err}`);
+      return;
+    }
+
+    this.worker = new Worker(this.workerUrl);
+
+    const ready = new Promise((resolve, reject) => {
+      const onFirst = (event) => {
+        if (event.data.type === 'ready') { this.worker.removeEventListener('message', onFirst); resolve(); }
+        else if (event.data.type === 'error') { this.worker.removeEventListener('message', onFirst); reject(new Error(event.data.message)); }
+      };
+      this.worker.addEventListener('message', onFirst);
+    });
+    if (this.wasmBytes) {
+      // Inlined build: hand the module straight over. No fetch involved, which
+      // also means no same-origin questions to answer.
+      this.worker.postMessage({ type: 'init', wasmBytes: this.wasmBytes });
+    } else {
+      this.worker.postMessage({ type: 'init', wasmUrl: this.wasmUrl });
+    }
+
+    try {
+      await ready;
+    } catch (err) {
+      this.setState('error', `Could not load the pitch detector: ${err.message}`);
+      return;
+    }
+
+    const source = this.context.createMediaStreamSource(this.stream);
+    this.node = new AudioWorkletNode(this.context, 'capture-processor');
+
+    // Relay windows out to the worker, and recycled buffers back to the worklet.
+    this.node.port.onmessage = (event) => {
+      const frame = event.data;
+      this.worker.postMessage(
+        { type: 'frame', frame, sampleRate: this.context.sampleRate },
+        [frame.buffer],
+      );
+    };
+
+    this.worker.onmessage = (event) => {
+      const msg = event.data;
+      if (msg.type === 'result') {
+        this.onResult(msg);
+        this.node.port.postMessage(msg.frame, [msg.frame.buffer]);
+      } else if (msg.type === 'recycle') {
+        this.node.port.postMessage(msg.frame, [msg.frame.buffer]);
+      }
+    };
+
+    // The graph only pulls nodes that reach the destination, so the worklet
+    // has to be connected — but through a silent gain, or you get feedback.
+    const mute = this.context.createGain();
+    mute.gain.value = 0;
+    source.connect(this.node);
+    this.node.connect(mute);
+    mute.connect(this.context.destination);
+
+    this.setState('running');
+  }
+
+  async stop() {
+    if (this.node) { this.node.port.postMessage('stop'); this.node.disconnect(); this.node = null; }
+    if (this.worker) { this.worker.terminate(); this.worker = null; }
+    if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
+    if (this.context) { await this.context.close(); this.context = null; }
+    this.setState('idle');
+  }
+}
+
+// --- src/app.js ------------------------------------------------------------
+// UI state and rendering.
+
+
+const IN_TUNE_CENTS = 5;      // green window
+const HOLD_MS = 600;          // keep the last reading on screen this long after a note dies
+const CLARITY_MIN = 0.85;     // reject weak / non-periodic frames
+const HISTORY = 5;            // median filter length
+const SMOOTHING = 0.25;       // needle easing per frame
+
+const el = {
+  body: document.body,
+  note: document.getElementById('note'),
+  cents: document.getElementById('cents'),
+  hz: document.getElementById('hz'),
+  needle: document.getElementById('needle'),
+  ticks: document.getElementById('ticks'),
+  strings: document.getElementById('strings'),
+  tuning: document.getElementById('tuning'),
+  a4: document.getElementById('a4'),
+  a4up: document.getElementById('a4up'),
+  a4down: document.getElementById('a4down'),
+  overlay: document.getElementById('overlay'),
+  start: document.getElementById('start'),
+  status: document.getElementById('status'),
+};
+
+const store = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem(key); return v === null ? fallback : v; }
+    catch { return fallback; }
+  },
+  set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } },
+};
+
+const state = {
+  tuningKey: TUNINGS[store.get('tuning', 'standard')] ? store.get('tuning', 'standard') : 'standard',
+  a4: Math.min(466, Math.max(415, Number(store.get('a4', 440)) || 440)),
+  targets: [],
+  history: [],
+  held: null,
+  lastGoodAt: 0,
+  displayCents: 0,
+  displayed: null,          // { target, centsOff, freq }
+};
+
+// --- setup -----------------------------------------------------------------
+
+function buildTicks() {
+  const frag = document.createDocumentFragment();
+  for (let c = -50; c <= 50; c += 10) {
+    const tick = document.createElement('div');
+    tick.className = `tick ${c % 50 === 0 ? 'major' : 'minor'}`;
+    tick.style.left = `${50 + c}%`;
+    if (c === 0) continue;      // the detent covers centre
+    frag.appendChild(tick);
+  }
+  el.ticks.appendChild(frag);
+}
+
+function buildTuningOptions() {
+  for (const [key, { label }] of Object.entries(TUNINGS)) {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = label;
+    el.tuning.appendChild(option);
+  }
+  el.tuning.value = state.tuningKey;
+}
+
+function refreshTargets() {
+  state.targets = buildTargets(state.tuningKey, state.a4);
+  state.held = null;
+  state.history = [];
+  el.strings.innerHTML = '';
+  for (const target of state.targets) {
+    const cell = document.createElement('div');
+    cell.className = 'string';
+    cell.dataset.on = 'false';
+    cell.dataset.note = target.note;
+    cell.textContent = target.label;
+    el.strings.appendChild(cell);
+  }
+  el.a4.textContent = `A4 ${state.a4}`;
+}
+
+// --- detection stream ------------------------------------------------------
+
+function onResult(msg) {
+  if (!msg.found || msg.clarity < CLARITY_MIN) return;
+
+  state.history.push(msg.freq);
+  if (state.history.length > HISTORY) state.history.shift();
+  if (state.history.length < 3) return;
+
+  const freq = median(state.history);
+  const target = matchString(freq, state.targets, state.held);
+  state.held = target;
+  state.lastGoodAt = performance.now();
+  state.displayed = { target, centsOff: cents(freq, target.freq), freq };
+}
+
+// --- render ----------------------------------------------------------------
+
+/** The meter spans +/-50 cents across the full track width. */
+function moveNeedle(centsValue) {
+  const halfWidth = el.needle.parentElement.clientWidth / 2;
+  el.needle.style.transform = `translate(${(centsValue / 50) * halfWidth}px, -50%)`;
+}
+
+function render() {
+  const active = state.displayed !== null && performance.now() - state.lastGoodAt < HOLD_MS;
+
+  if (!active) {
+    if (state.displayed && performance.now() - state.lastGoodAt > HOLD_MS * 3) {
+      state.history = [];
+      state.held = null;
+    }
+    el.body.dataset.active = 'false';
+    el.body.dataset.tuned = 'false';
+    state.displayCents += (0 - state.displayCents) * SMOOTHING;
+    moveNeedle(state.displayCents);
+    requestAnimationFrame(render);
+    return;
+  }
+
+  const { target, centsOff, freq } = state.displayed;
+  const tuned = Math.abs(centsOff) <= IN_TUNE_CENTS;
+
+  el.body.dataset.active = 'true';
+  el.body.dataset.tuned = String(tuned);
+
+  el.note.innerHTML = `${target.label}<sub>${target.octave}</sub>`;
+  el.cents.textContent = tuned
+    ? 'in tune'
+    : `${centsOff > 0 ? '+' : '−'}${Math.abs(centsOff).toFixed(1)} ¢`;
+  el.hz.textContent = `${freq.toFixed(2)} Hz · target ${target.freq.toFixed(2)} Hz`;
+
+  for (const cell of el.strings.children) {
+    cell.dataset.on = String(cell.dataset.note === target.note);
+  }
+
+  const clamped = Math.max(-50, Math.min(50, centsOff));
+  state.displayCents += (clamped - state.displayCents) * SMOOTHING;
+  moveNeedle(state.displayCents);
+
+  requestAnimationFrame(render);
+}
+
+// --- wiring ----------------------------------------------------------------
+
+const engine = new TunerEngine({
+  ...resolveSources(),
+  onResult,
+  onStateChange(engineState, detail) {
+    if (engineState === 'running') {
+      el.overlay.hidden = true;
+    } else if (engineState === 'error') {
+      el.overlay.hidden = false;
+      el.start.textContent = 'Try again';
+      el.status.textContent = detail;
+      el.status.dataset.error = 'true';
+    } else if (engineState === 'starting') {
+      el.start.disabled = true;
+      el.status.textContent = 'Waiting for microphone permission…';
+    }
+    if (engineState !== 'starting') el.start.disabled = false;
+  },
+});
+
+el.start.addEventListener('click', () => engine.start());
+
+if (location.protocol === 'file:') {
+  el.status.textContent = 'Serve this over http:// — opening it straight from disk will not work.';
+}
+
+el.tuning.addEventListener('change', () => {
+  state.tuningKey = el.tuning.value;
+  store.set('tuning', state.tuningKey);
+  refreshTargets();
+});
+
+function nudgeA4(delta) {
+  state.a4 = Math.min(466, Math.max(415, state.a4 + delta));
+  store.set('a4', String(state.a4));
+  refreshTargets();
+}
+el.a4up.addEventListener('click', () => nudgeA4(1));
+el.a4down.addEventListener('click', () => nudgeA4(-1));
+
+buildTicks();
+buildTuningOptions();
+refreshTargets();
+requestAnimationFrame(render);
+
+// Exposed for the end-to-end test harness.
+window.__tuner = { state, engine };
+</script>
+</body>
+</html>
