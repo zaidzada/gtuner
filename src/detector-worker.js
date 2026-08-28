@@ -51,7 +51,8 @@ self.onmessage = async (event) => {
     const n = Math.min(frame.length, inputView.length);
     inputView.set(frame.subarray(0, n));
 
-    const found = exports_.detect(n, msg.sampleRate, 0.15);
+    // gate 0 = use the module's silence floor; loudness must not gate real notes.
+    const found = exports_.detect(n, msg.sampleRate, 0.15, 0);
 
     self.postMessage({
       type: 'result',

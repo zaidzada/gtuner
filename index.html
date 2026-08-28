@@ -89,6 +89,33 @@
   .string[data-on="true"] { color: var(--fg); border-color: #39414b; background: #12161b; }
   body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: rgba(52,211,153,.45); }
 
+  /* --- input level ------------------------------------------------------ */
+  .level { display: flex; align-items: center; gap: 12px; }
+  .level-track {
+    position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--line);
+  }
+  .level-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 2px;
+    background: #39414b; transition: background .25s ease;
+  }
+  .level-fill[data-hot="true"] { background: var(--accent); }
+  .level-floor {
+    position: absolute; top: -4px; bottom: -4px; width: 1px; background: #39414b;
+  }
+  .level-peak {
+    position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px;
+    background: var(--fg); opacity: .45; transition: opacity .2s ease;
+  }
+  .level-db {
+    font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+    min-width: 64px; text-align: right;
+  }
+  .hint {
+    text-align: center; font-size: 13px; color: var(--warn); height: 18px;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  .hint[data-show="true"] { opacity: 1; }
+
   /* --- footer ----------------------------------------------------------- */
   .controls {
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -138,8 +165,18 @@
     </div>
 
     <div class="hz" id="hz"></div>
+    <div class="hint" id="hint"></div>
 
     <div class="strings" id="strings"></div>
+
+    <div class="level">
+      <div class="level-track">
+        <div class="level-fill" id="level-fill"></div>
+        <div class="level-floor" id="level-floor" title="detection floor"></div>
+        <div class="level-peak" id="level-peak"></div>
+      </div>
+      <span class="level-db" id="level-db">&mdash;</span>
+    </div>
 
     <div class="controls">
       <select id="tuning" aria-label="Tuning"></select>

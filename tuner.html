@@ -89,6 +89,33 @@
   .string[data-on="true"] { color: var(--fg); border-color: #39414b; background: #12161b; }
   body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: rgba(52,211,153,.45); }
 
+  /* --- input level ------------------------------------------------------ */
+  .level { display: flex; align-items: center; gap: 12px; }
+  .level-track {
+    position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--line);
+  }
+  .level-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 2px;
+    background: #39414b; transition: background .25s ease;
+  }
+  .level-fill[data-hot="true"] { background: var(--accent); }
+  .level-floor {
+    position: absolute; top: -4px; bottom: -4px; width: 1px; background: #39414b;
+  }
+  .level-peak {
+    position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px;
+    background: var(--fg); opacity: .45; transition: opacity .2s ease;
+  }
+  .level-db {
+    font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+    min-width: 64px; text-align: right;
+  }
+  .hint {
+    text-align: center; font-size: 13px; color: var(--warn); height: 18px;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  .hint[data-show="true"] { opacity: 1; }
+
   /* --- footer ----------------------------------------------------------- */
   .controls {
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -138,8 +165,18 @@
     </div>
 
     <div class="hz" id="hz"></div>
+    <div class="hint" id="hint"></div>
 
     <div class="strings" id="strings"></div>
+
+    <div class="level">
+      <div class="level-track">
+        <div class="level-fill" id="level-fill"></div>
+        <div class="level-floor" id="level-floor" title="detection floor"></div>
+        <div class="level-peak" id="level-peak"></div>
+      </div>
+      <span class="level-db" id="level-db">&mdash;</span>
+    </div>
 
     <div class="controls">
       <select id="tuning" aria-label="Tuning"></select>
@@ -279,7 +316,8 @@ self.onmessage = async (event) => {
     const n = Math.min(frame.length, inputView.length);
     inputView.set(frame.subarray(0, n));
 
-    const found = exports_.detect(n, msg.sampleRate, 0.15);
+    // gate 0 = use the module's silence floor; loudness must not gate real notes.
+    const found = exports_.detect(n, msg.sampleRate, 0.15, 0);
 
     self.postMessage({
       type: 'result',
@@ -301,8 +339,8 @@ self.onmessage = async (event) => {
 // with no other files beside it.
 // ---------------------------------------------------------------------------
 
-/** wasm/yin.wasm, base64 (1847 bytes decoded) */
-const EMBEDDED_WASM = "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";
+/** wasm/yin.wasm, base64 (1863 bytes decoded) */
+const EMBEDDED_WASM = "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";
 
 function base64ToBytes(base64) {
   const binary = atob(base64);
@@ -562,19 +600,32 @@ class TunerEngine {
 
 
 const IN_TUNE_CENTS = 5;      // green window
-const HOLD_MS = 600;          // keep the last reading on screen this long after a note dies
+const HOLD_MS = 600;          // keep the last reading up this long after a note dies
 const CLARITY_MIN = 0.85;     // reject weak / non-periodic frames
 const HISTORY = 5;            // median filter length
 const SMOOTHING = 0.25;       // needle easing per frame
+
+// Input level meter, in dBFS. The scale is logarithmic because microphone
+// levels are: a guitar that reads 5% of full scale linearly is a perfectly
+// usable -26 dB, and a linear bar would show it as nearly nothing.
+const LEVEL_MIN_DB = -80;     // left edge of the meter
+const LEVEL_FLOOR_DB = -70;   // below here detection gets unreliable
+const PEAK_FALL_DB_PER_SEC = 24;
+const QUIET_HINT_AFTER_MS = 2500;
 
 const el = {
   body: document.body,
   note: document.getElementById('note'),
   cents: document.getElementById('cents'),
   hz: document.getElementById('hz'),
+  hint: document.getElementById('hint'),
   needle: document.getElementById('needle'),
   ticks: document.getElementById('ticks'),
   strings: document.getElementById('strings'),
+  levelFill: document.getElementById('level-fill'),
+  levelPeak: document.getElementById('level-peak'),
+  levelFloor: document.getElementById('level-floor'),
+  levelDb: document.getElementById('level-db'),
   tuning: document.getElementById('tuning'),
   a4: document.getElementById('a4'),
   a4up: document.getElementById('a4up'),
@@ -601,20 +652,28 @@ const state = {
   lastGoodAt: 0,
   displayCents: 0,
   displayed: null,          // { target, centsOff, freq }
+  levelDb: -120,
+  peakDb: -120,
+  peakAt: 0,
+  running: false,
 };
 
 // --- setup -----------------------------------------------------------------
 
+const dbToPercent = (db) =>
+  Math.max(0, Math.min(100, ((db - LEVEL_MIN_DB) / -LEVEL_MIN_DB) * 100));
+
 function buildTicks() {
   const frag = document.createDocumentFragment();
   for (let c = -50; c <= 50; c += 10) {
+    if (c === 0) continue;              // the detent covers centre
     const tick = document.createElement('div');
-    tick.className = `tick ${c % 50 === 0 ? 'major' : 'minor'}`;
+    tick.className = `tick ${Math.abs(c) === 50 ? 'major' : 'minor'}`;
     tick.style.left = `${50 + c}%`;
-    if (c === 0) continue;      // the detent covers centre
     frag.appendChild(tick);
   }
   el.ticks.appendChild(frag);
+  el.levelFloor.style.left = `${dbToPercent(LEVEL_FLOOR_DB)}%`;
 }
 
 function buildTuningOptions() {
@@ -646,6 +705,15 @@ function refreshTargets() {
 // --- detection stream ------------------------------------------------------
 
 function onResult(msg) {
+  // The level meter updates on every frame, detected pitch or not — it is the
+  // only thing that can tell you the microphone is working but too quiet.
+  const now = performance.now();
+  state.levelDb = msg.rms > 0 ? 20 * Math.log10(msg.rms) : -120;
+  if (state.levelDb > state.peakDb) {
+    state.peakDb = state.levelDb;
+    state.peakAt = now;
+  }
+
   if (!msg.found || msg.clarity < CLARITY_MIN) return;
 
   state.history.push(msg.freq);
@@ -655,7 +723,7 @@ function onResult(msg) {
   const freq = median(state.history);
   const target = matchString(freq, state.targets, state.held);
   state.held = target;
-  state.lastGoodAt = performance.now();
+  state.lastGoodAt = now;
   state.displayed = { target, centsOff: cents(freq, target.freq), freq };
 }
 
@@ -667,13 +735,56 @@ function moveNeedle(centsValue) {
   el.needle.style.transform = `translate(${(centsValue / 50) * halfWidth}px, -50%)`;
 }
 
+let lastFrameAt = performance.now();
+
+function renderLevel(now, elapsedSec) {
+  // Peak marker falls back at a fixed rate rather than snapping, so a single
+  // pluck stays readable long enough to see how hard you hit it.
+  state.peakDb = Math.max(state.levelDb, state.peakDb - PEAK_FALL_DB_PER_SEC * elapsedSec);
+
+  const audible = state.levelDb > LEVEL_MIN_DB;
+  el.levelFill.style.width = `${dbToPercent(state.levelDb)}%`;
+  el.levelFill.dataset.hot = String(state.levelDb >= LEVEL_FLOOR_DB);
+  el.levelPeak.style.left = `${dbToPercent(state.peakDb)}%`;
+  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.45' : '0';
+  el.levelDb.textContent = audible ? `${state.levelDb.toFixed(0)} dB` : '—';
+
+  // Signal is arriving but nothing is being detected: say why.
+  const starved = state.running
+    && now - state.lastGoodAt > QUIET_HINT_AFTER_MS
+    && state.peakDb < LEVEL_FLOOR_DB;
+  el.hint.dataset.show = String(starved);
+  if (starved) {
+    el.hint.textContent = state.peakDb < -95
+      ? 'No signal — is the right microphone selected?'
+      : 'Too quiet to detect — move closer to the mic.';
+  }
+}
+
+function clearReadout() {
+  el.note.textContent = '–';
+  el.cents.textContent = '';
+  el.hz.textContent = '';
+  for (const cell of el.strings.children) cell.dataset.on = 'false';
+}
+
 function render() {
-  const active = state.displayed !== null && performance.now() - state.lastGoodAt < HOLD_MS;
+  const now = performance.now();
+  const elapsedSec = Math.min(0.1, (now - lastFrameAt) / 1000);
+  lastFrameAt = now;
+
+  renderLevel(now, elapsedSec);
+
+  const active = state.displayed !== null && now - state.lastGoodAt < HOLD_MS;
 
   if (!active) {
-    if (state.displayed && performance.now() - state.lastGoodAt > HOLD_MS * 3) {
+    if (state.displayed && now - state.lastGoodAt > HOLD_MS * 3) {
+      // Fully let go: clear the readout instead of leaving a stale note on
+      // screen, which reads as the tuner having frozen.
+      state.displayed = null;
       state.history = [];
       state.held = null;
+      clearReadout();
     }
     el.body.dataset.active = 'false';
     el.body.dataset.tuned = 'false';
@@ -712,8 +823,10 @@ const engine = new TunerEngine({
   ...resolveSources(),
   onResult,
   onStateChange(engineState, detail) {
+    state.running = engineState === 'running';
     if (engineState === 'running') {
       el.overlay.hidden = true;
+      state.lastGoodAt = performance.now();
     } else if (engineState === 'error') {
       el.overlay.hidden = false;
       el.start.textContent = 'Try again';

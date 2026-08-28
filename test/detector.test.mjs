@@ -45,7 +45,7 @@ for (const sampleRate of SAMPLE_RATES) {
         for (const t0 of [0.02, 0.55, 1.10]) {
           const freq = ref * Math.pow(2, detune / 1200);
           input.set(pluck(freq, t0, amps, FRAME, sampleRate, 0.004, rand));
-          const found = wasm.detect(FRAME, sampleRate, 0.15);
+          const found = wasm.detect(FRAME, sampleRate, 0.15, 0);
           const error = found ? cents(output[0], freq) : NaN;
           check(
             `${name.padEnd(4)} ${profileName.padEnd(15)} ${String(detune).padStart(3)}¢ t=${t0} @${sampleRate}`,
@@ -59,22 +59,53 @@ for (const sampleRate of SAMPLE_RATES) {
   }
 }
 
+// --- quiet signals ----------------------------------------------------------
+//
+// Regression: the detector originally carried a hardcoded RMS gate of 0.005
+// (-46 dBFS), which is loud. Every test signal above is normalized to full
+// scale, so the gate was never exercised — but a real guitar into a laptop mic
+// with automatic gain control disabled sits well below it, and notes were
+// silently dropped a fraction of a second after the attack. Loudness must not
+// gate detection; periodicity is what decides.
+
+for (const [label, level] of [['-26 dBFS', 0.05], ['-36 dBFS', 0.015], ['-46 dBFS', 0.005], ['-56 dBFS', 0.0015]]) {
+  for (const [name, ref] of [['E2', 82.4069], ['G3', 195.9977], ['E4', 329.6276]]) {
+    const quiet = pluck(ref, 0.4, PROFILES.weakFundamental, FRAME, 44100, 0.00002, rand);
+    for (let i = 0; i < FRAME; i++) quiet[i] *= level;
+    input.set(quiet);
+    const found = wasm.detect(FRAME, 44100, 0.15, 0);
+    const error = found ? cents(output[0], ref) : NaN;
+    check(
+      `quiet ${label.padEnd(9)} ${name}`,
+      found === 1 && Math.abs(error) <= TOLERANCE_CENTS,
+      found ? `err ${error.toFixed(3)}¢` : `not detected (rms ${output[2].toExponential(2)})`,
+    );
+  }
+}
+
 // --- rejection --------------------------------------------------------------
 
 input.fill(0);
-check('silence', wasm.detect(FRAME, 44100, 0.15) === 0, 'reported a pitch');
+check('silence', wasm.detect(FRAME, 44100, 0.15, 0) === 0, 'reported a pitch');
 
-for (let i = 0; i < FRAME; i++) input[i] = (rand() * 2 - 1) * 0.25;
-check('white noise', wasm.detect(FRAME, 44100, 0.15) === 0,
-  `reported ${output[0].toFixed(1)} Hz, clarity ${output[1].toFixed(3)}`);
+// Noise must be rejected at every amplitude, not just loud noise — otherwise
+// lowering the level gate would trade dropped notes for phantom ones.
+for (const amp of [0.5, 0.2, 0.05, 0.01, 0.002, 0.0005]) {
+  for (let i = 0; i < FRAME; i++) input[i] = (rand() * 2 - 1) * amp;
+  check(`white noise @${amp}`, wasm.detect(FRAME, 44100, 0.15, 0) === 0,
+    `reported ${output[0].toFixed(1)} Hz, clarity ${output[1].toFixed(3)}`);
+}
 
-for (let i = 0; i < FRAME; i++) input[i] = (rand() * 2 - 1) * 0.0008;
-check('near silence', wasm.detect(FRAME, 44100, 0.15) === 0, 'reported a pitch');
+// rms must be reported even when no pitch is found, so the level meter works.
+for (let i = 0; i < FRAME; i++) input[i] = (rand() * 2 - 1) * 0.02;
+wasm.detect(FRAME, 44100, 0.15, 0);
+check('rms reported without a pitch', output[2] > 0.005 && output[2] < 0.02,
+  `rms ${output[2].toFixed(5)}`);
 
 // --- clarity is meaningful on a real tone -----------------------------------
 
 input.set(pluck(110, 0.05, PROFILES.bright, FRAME, 44100, 0.004, rand));
-wasm.detect(FRAME, 44100, 0.15);
+wasm.detect(FRAME, 44100, 0.15, 0);
 check('clarity on clean tone', output[1] > 0.9, `clarity ${output[1].toFixed(3)}`);
 
 // --- benchmark --------------------------------------------------------------
@@ -82,7 +113,7 @@ check('clarity on clean tone', output[1] > 0.9, `clarity ${output[1].toFixed(3)}
 input.set(pluck(82.4069, 0.05, PROFILES.weakFundamental, FRAME, 44100, 0.004, rand));
 const iterations = 400;
 const started = process.hrtime.bigint();
-for (let i = 0; i < iterations; i++) wasm.detect(FRAME, 44100, 0.15);
+for (let i = 0; i < iterations; i++) wasm.detect(FRAME, 44100, 0.15, 0);
 const msPerFrame = Number(process.hrtime.bigint() - started) / 1e6 / iterations;
 const hopMs = (1024 / 44100) * 1000;
 

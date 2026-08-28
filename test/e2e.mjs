@@ -89,6 +89,9 @@ for (const build of BUILDS) {
       tuned: document.body.dataset.tuned === 'true',
       activeString: document.querySelector('.string[data-on="true"]')?.dataset.note ?? null,
       displayed: window.__tuner.state.displayed,
+      levelDb: window.__tuner.state.levelDb,
+      levelWidth: document.getElementById('level-fill').style.width,
+      hintShown: document.getElementById('hint').dataset.show === 'true',
     }));
 
     const expectedNote = `${fixture.note}${fixture.octave}`;
@@ -104,6 +107,9 @@ for (const build of BUILDS) {
     if (seen.tuned !== (Math.abs(fixture.detune) <= 5)) {
       problems.push(`in-tune flag ${seen.tuned}, expected ${Math.abs(fixture.detune) <= 5}`);
     }
+    if (!(seen.levelDb > -80)) problems.push(`level meter reads ${seen.levelDb?.toFixed?.(1)} dB with signal present`);
+    if (!seen.levelWidth || seen.levelWidth === '0%') problems.push('level bar has no width');
+    if (seen.hintShown) problems.push('"too quiet" hint showing despite a working detection');
     if (pageErrors.length) problems.push(`page errors: ${pageErrors.join(' | ')}`);
 
     if (problems.length) failed++;

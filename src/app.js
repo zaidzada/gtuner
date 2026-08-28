@@ -5,19 +5,32 @@ import { resolveSources } from './sources.js';
 import { TUNINGS, buildTargets, cents, matchString, median } from './music.js';
 
 const IN_TUNE_CENTS = 5;      // green window
-const HOLD_MS = 600;          // keep the last reading on screen this long after a note dies
+const HOLD_MS = 600;          // keep the last reading up this long after a note dies
 const CLARITY_MIN = 0.85;     // reject weak / non-periodic frames
 const HISTORY = 5;            // median filter length
 const SMOOTHING = 0.25;       // needle easing per frame
+
+// Input level meter, in dBFS. The scale is logarithmic because microphone
+// levels are: a guitar that reads 5% of full scale linearly is a perfectly
+// usable -26 dB, and a linear bar would show it as nearly nothing.
+const LEVEL_MIN_DB = -80;     // left edge of the meter
+const LEVEL_FLOOR_DB = -70;   // below here detection gets unreliable
+const PEAK_FALL_DB_PER_SEC = 24;
+const QUIET_HINT_AFTER_MS = 2500;
 
 const el = {
   body: document.body,
   note: document.getElementById('note'),
   cents: document.getElementById('cents'),
   hz: document.getElementById('hz'),
+  hint: document.getElementById('hint'),
   needle: document.getElementById('needle'),
   ticks: document.getElementById('ticks'),
   strings: document.getElementById('strings'),
+  levelFill: document.getElementById('level-fill'),
+  levelPeak: document.getElementById('level-peak'),
+  levelFloor: document.getElementById('level-floor'),
+  levelDb: document.getElementById('level-db'),
   tuning: document.getElementById('tuning'),
   a4: document.getElementById('a4'),
   a4up: document.getElementById('a4up'),
@@ -44,20 +57,28 @@ const state = {
   lastGoodAt: 0,
   displayCents: 0,
   displayed: null,          // { target, centsOff, freq }
+  levelDb: -120,
+  peakDb: -120,
+  peakAt: 0,
+  running: false,
 };
 
 // --- setup -----------------------------------------------------------------
 
+const dbToPercent = (db) =>
+  Math.max(0, Math.min(100, ((db - LEVEL_MIN_DB) / -LEVEL_MIN_DB) * 100));
+
 function buildTicks() {
   const frag = document.createDocumentFragment();
   for (let c = -50; c <= 50; c += 10) {
+    if (c === 0) continue;              // the detent covers centre
     const tick = document.createElement('div');
-    tick.className = `tick ${c % 50 === 0 ? 'major' : 'minor'}`;
+    tick.className = `tick ${Math.abs(c) === 50 ? 'major' : 'minor'}`;
     tick.style.left = `${50 + c}%`;
-    if (c === 0) continue;      // the detent covers centre
     frag.appendChild(tick);
   }
   el.ticks.appendChild(frag);
+  el.levelFloor.style.left = `${dbToPercent(LEVEL_FLOOR_DB)}%`;
 }
 
 function buildTuningOptions() {
@@ -89,6 +110,15 @@ function refreshTargets() {
 // --- detection stream ------------------------------------------------------
 
 function onResult(msg) {
+  // The level meter updates on every frame, detected pitch or not — it is the
+  // only thing that can tell you the microphone is working but too quiet.
+  const now = performance.now();
+  state.levelDb = msg.rms > 0 ? 20 * Math.log10(msg.rms) : -120;
+  if (state.levelDb > state.peakDb) {
+    state.peakDb = state.levelDb;
+    state.peakAt = now;
+  }
+
   if (!msg.found || msg.clarity < CLARITY_MIN) return;
 
   state.history.push(msg.freq);
@@ -98,7 +128,7 @@ function onResult(msg) {
   const freq = median(state.history);
   const target = matchString(freq, state.targets, state.held);
   state.held = target;
-  state.lastGoodAt = performance.now();
+  state.lastGoodAt = now;
   state.displayed = { target, centsOff: cents(freq, target.freq), freq };
 }
 
@@ -110,13 +140,56 @@ function moveNeedle(centsValue) {
   el.needle.style.transform = `translate(${(centsValue / 50) * halfWidth}px, -50%)`;
 }
 
+let lastFrameAt = performance.now();
+
+function renderLevel(now, elapsedSec) {
+  // Peak marker falls back at a fixed rate rather than snapping, so a single
+  // pluck stays readable long enough to see how hard you hit it.
+  state.peakDb = Math.max(state.levelDb, state.peakDb - PEAK_FALL_DB_PER_SEC * elapsedSec);
+
+  const audible = state.levelDb > LEVEL_MIN_DB;
+  el.levelFill.style.width = `${dbToPercent(state.levelDb)}%`;
+  el.levelFill.dataset.hot = String(state.levelDb >= LEVEL_FLOOR_DB);
+  el.levelPeak.style.left = `${dbToPercent(state.peakDb)}%`;
+  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.45' : '0';
+  el.levelDb.textContent = audible ? `${state.levelDb.toFixed(0)} dB` : '—';
+
+  // Signal is arriving but nothing is being detected: say why.
+  const starved = state.running
+    && now - state.lastGoodAt > QUIET_HINT_AFTER_MS
+    && state.peakDb < LEVEL_FLOOR_DB;
+  el.hint.dataset.show = String(starved);
+  if (starved) {
+    el.hint.textContent = state.peakDb < -95
+      ? 'No signal — is the right microphone selected?'
+      : 'Too quiet to detect — move closer to the mic.';
+  }
+}
+
+function clearReadout() {
+  el.note.textContent = '–';
+  el.cents.textContent = '';
+  el.hz.textContent = '';
+  for (const cell of el.strings.children) cell.dataset.on = 'false';
+}
+
 function render() {
-  const active = state.displayed !== null && performance.now() - state.lastGoodAt < HOLD_MS;
+  const now = performance.now();
+  const elapsedSec = Math.min(0.1, (now - lastFrameAt) / 1000);
+  lastFrameAt = now;
+
+  renderLevel(now, elapsedSec);
+
+  const active = state.displayed !== null && now - state.lastGoodAt < HOLD_MS;
 
   if (!active) {
-    if (state.displayed && performance.now() - state.lastGoodAt > HOLD_MS * 3) {
+    if (state.displayed && now - state.lastGoodAt > HOLD_MS * 3) {
+      // Fully let go: clear the readout instead of leaving a stale note on
+      // screen, which reads as the tuner having frozen.
+      state.displayed = null;
       state.history = [];
       state.held = null;
+      clearReadout();
     }
     el.body.dataset.active = 'false';
     el.body.dataset.tuned = 'false';
@@ -155,8 +228,10 @@ const engine = new TunerEngine({
   ...resolveSources(),
   onResult,
   onStateChange(engineState, detail) {
+    state.running = engineState === 'running';
     if (engineState === 'running') {
       el.overlay.hidden = true;
+      state.lastGoodAt = performance.now();
     } else if (engineState === 'error') {
       el.overlay.hidden = false;
       el.start.textContent = 'Try again';

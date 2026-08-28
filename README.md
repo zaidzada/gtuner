@@ -141,6 +141,17 @@ worker and WASM by different routes — and checks that the `file://` case fails
 with an explanation. Needs Playwright (`npm i playwright`), or set
 `CHROME_PATH` to a Chrome binary.
 
+## Input level meter
+
+The thin bar under the strings shows microphone level in **dBFS**, with a tick
+marking the point below which detection gets unreliable (-70 dB) and a peak
+marker that falls back slowly. The scale is logarithmic because microphone
+levels are — a guitar reading 5% of full scale linearly is a perfectly usable
+-26 dB, and a linear bar would show it as nearly nothing.
+
+If signal is arriving but nothing is being detected for a couple of seconds,
+the page says so rather than just sitting there.
+
 ## Tuning behaviour worth knowing
 
 - **String matching has 40 cents of hysteresis.** Without it the display
@@ -152,3 +163,12 @@ with an explanation. Needs Playwright (`npm i playwright`), or set
   `noiseSuppression`, `autoGainControl` all `false`). Those defaults are tuned
   for speech and mangle a sustained tone.
 - **Detection floor is 40 Hz**, set by `TAUMAX` in `yin.c`.
+- **Loudness does not gate detection.** `yin.c` only skips buffers below
+  -80 dBFS, which is digital silence; what rejects a frame is lack of
+  periodicity, not lack of volume. This matters because the capture path
+  deliberately disables automatic gain control, so a real guitar sits far
+  below any "comfortable" threshold. An earlier version gated at -46 dBFS and
+  dropped real notes a fraction of a second after each attack — the tests all
+  passed because every synthetic signal was normalized to full scale.
+  `test/detector.test.mjs` now covers levels down to -56 dBFS, and
+  `test/fixtures/a2-quiet.wav` exercises the same thing end to end.

@@ -24,8 +24,13 @@ static float g_in[NMAX];
 static float g_cmnd[TAUMAX];
 static float g_out[4];        /* freq, clarity, rms, tau */
 
-/* Reject anything quieter than this before doing any work. */
-#define RMS_GATE 0.005f
+/* Absolute floor: below this the buffer is digital silence and there is
+   nothing to analyse. Deliberately very low (-80 dBFS). Rejecting quiet-but-
+   real signal is the caller's business, not ours — a microphone with
+   automatic gain control switched off (which a tuner wants) sits far below
+   any "comfortable" threshold, and gating here silently drops real notes.
+   Periodicity, not loudness, is what tells us whether a pitch is present. */
+#define SILENCE_FLOOR 0.0001f
 
 __attribute__((export_name("input_ptr")))
 float *input_ptr(void) { return g_in; }
@@ -38,13 +43,17 @@ int frame_size(void) { return NMAX; }
 
 /*
  * Returns 1 and fills g_out when a pitch is found, 0 otherwise.
- *   n   - number of valid samples in g_in (<= NMAX)
- *   sr  - sample rate in Hz
- *   thr - YIN absolute threshold, typically 0.10 - 0.20
+ * g_out[2] (rms) is filled in every case, including when no pitch is found,
+ * so the caller can drive a level meter.
+ *   n    - number of valid samples in g_in (<= NMAX)
+ *   sr   - sample rate in Hz
+ *   thr  - YIN absolute threshold, typically 0.10 - 0.20
+ *   gate - skip analysis below this RMS; pass 0 to use SILENCE_FLOOR
  */
 __attribute__((export_name("detect")))
-int detect(int n, float sr, float thr)
+int detect(int n, float sr, float thr, float gate)
 {
+    if (gate < SILENCE_FLOOR) gate = SILENCE_FLOOR;
     if (n > NMAX) n = NMAX;
 
     int tau_max = n / 2;
@@ -55,7 +64,7 @@ int detect(int n, float sr, float thr)
     for (int i = 0; i < n; i++) energy += g_in[i] * g_in[i];
     float rms = __builtin_sqrtf(energy / (float)n);
     g_out[2] = rms;
-    if (rms < RMS_GATE) { g_out[0] = 0.0f; g_out[1] = 0.0f; return 0; }
+    if (rms < gate) { g_out[0] = 0.0f; g_out[1] = 0.0f; return 0; }
 
     /* --- 1 & 2. difference function, normalized as we go ---------------- */
     const int w = n - tau_max;          /* comparison window length */
