@@ -4,16 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0d10">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0d10'/%3E%3Cpath d='M8 16h16' stroke='%231e2329' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M16 7v18' stroke='%2334d399' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0d10'/%3E%3Cpath d='M8 16h16' stroke='%235b6472' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M16 7v18' stroke='%2334d399' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>Tuner</title>
 <style>
   :root {
-    --bg: #0b0d10;
-    --fg: #e8eaed;
-    --dim: #6b7280;
-    --line: #1e2329;
-    --accent: #34d399;
-    --warn: #f0b429;
+    /* Contrast ratios are against --bg. WCAG 2.1 AA: 4.5:1 text,
+       3:1 large text and UI component boundaries. */
+    --bg:           #0b0d10;
+    --surface:      #161b22; /*        raised chips, hover fills   */
+    --trough:       #262c35; /*        inset track of the level bar */
+    --fg:           #e8eaed; /* 16.1:1 primary text                */
+    --dim:          #9aa4b2; /*  7.7:1 secondary text              */
+    --line:         #5b6472; /*  3.3:1 meter scale, borders        */
+    --line-strong:  #6a7482; /*  4.1:1 active borders, focus ring  */
+    --accent:       #34d399; /* 10.1:1 in tune                     */
+    --warn:         #f0b429; /* 10.4:1 off pitch, hints            */
+    --error:        #f87171; /*  7.0:1 status errors               */
     --bar-h: 76px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -44,8 +50,11 @@
     font-variant-numeric: tabular-nums; letter-spacing: .02em; height: 24px;
   }
   body[data-tuned="true"] .note { color: var(--accent); }
+  /* 116px placeholder glyph — large text, 3:1 is the AA bar. */
   body[data-active="false"] .note { color: var(--line); }
-  body[data-active="false"] .cents { color: var(--line); }
+  body[data-active="false"] .cents { color: var(--dim); }
+  /* "in tune" is spelled out, so the state does not rest on colour alone. */
+  body[data-tuned="true"] .cents { color: var(--accent); font-weight: 500; }
 
   /* --- meter ------------------------------------------------------------ */
   .meter { position: relative; height: var(--bar-h); }
@@ -76,7 +85,7 @@
   body[data-active="false"] .needle { opacity: 0; }
   .dirs {
     position: absolute; inset: auto 0 -22px; display: flex; justify-content: space-between;
-    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--line);
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim);
   }
 
   /* --- strings ---------------------------------------------------------- */
@@ -86,25 +95,27 @@
     background: none; color: var(--dim); font: inherit; font-size: 14px; text-align: center;
     transition: color .15s ease, border-color .15s ease, background .15s ease;
   }
-  .string[data-on="true"] { color: var(--fg); border-color: #39414b; background: #12161b; }
-  body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: rgba(52,211,153,.45); }
+  .string[data-on="true"] { color: var(--fg); border-color: var(--line-strong); background: var(--surface); }
+  body[data-tuned="true"] .string[data-on="true"] { color: var(--accent); border-color: var(--accent); }
 
   /* --- input level ------------------------------------------------------ */
   .level { display: flex; align-items: center; gap: 12px; }
   .level-track {
-    position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--line);
+    position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--trough);
+    /* the trough itself is near-black; this ring gives the control a 3.3:1 edge */
+    box-shadow: 0 0 0 1px var(--line);
   }
   .level-fill {
     position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 2px;
-    background: #39414b; transition: background .25s ease;
+    background: var(--dim); transition: background .25s ease;
   }
   .level-fill[data-hot="true"] { background: var(--accent); }
   .level-floor {
-    position: absolute; top: -4px; bottom: -4px; width: 1px; background: #39414b;
+    position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--fg);
   }
   .level-peak {
     position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px;
-    background: var(--fg); opacity: .45; transition: opacity .2s ease;
+    background: var(--fg); opacity: .9; transition: opacity .2s ease;
   }
   .level-db {
     font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
@@ -119,11 +130,11 @@
   .diag {
     font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color: var(--dim); margin: 0; padding: 12px 14px;
-    border: 1px solid var(--line); border-radius: 8px; background: #0e1116;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
     white-space: pre; overflow-x: auto;
   }
   .diag[hidden] { display: none; }
-  .diag b { color: #8b95a3; font-weight: 400; }
+  .diag b { color: var(--fg); font-weight: 400; }
 
   /* --- footer ----------------------------------------------------------- */
   .controls {
@@ -134,7 +145,7 @@
     background: none; border: 1px solid var(--line); border-radius: 7px; color: var(--dim);
     font: inherit; font-size: 13px; padding: 6px 8px;
   }
-  select:focus-visible, .step:focus-visible, button:focus-visible { outline: 1px solid #39414b; outline-offset: 2px; }
+  select:focus-visible, .step:focus-visible, button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
   .a4 { display: flex; align-items: center; gap: 6px; }
   .step { width: 26px; padding: 5px 0; text-align: center; cursor: pointer; }
   .a4 output { font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
@@ -148,12 +159,13 @@
   }
   .overlay[hidden] { display: none; }
   #start {
-    background: none; border: 1px solid #39414b; border-radius: 999px; color: var(--fg);
+    background: none; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg);
     font: inherit; font-size: 15px; padding: 13px 30px; cursor: pointer;
     transition: border-color .15s ease, background .15s ease;
   }
-  #start:hover { border-color: var(--fg); background: #12161b; }
+  #start:hover { border-color: var(--fg); background: var(--surface); }
   #status { color: var(--dim); font-size: 14px; max-width: 34ch; }
+  #status[data-error="true"] { color: var(--error); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -911,7 +923,7 @@ function renderLevel(now, elapsedSec) {
   el.levelFill.style.width = `${dbToPercent(state.levelDb)}%`;
   el.levelFill.dataset.hot = String(state.levelDb >= LEVEL_FLOOR_DB);
   el.levelPeak.style.left = `${dbToPercent(state.peakDb)}%`;
-  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.45' : '0';
+  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.9' : '0';
   el.levelDb.textContent = audible ? `${state.levelDb.toFixed(0)} dB` : '—';
 
   // Reconnecting takes priority: the screen is frozen for a real reason and
@@ -1038,9 +1050,11 @@ function render() {
   el.body.dataset.tuned = String(tuned);
 
   el.note.innerHTML = `${target.label}<sub>${target.octave}</sub>`;
+  // The word (and the tick) carry the state without relying on colour: green
+  // note + green detent alone would be a WCAG 1.4.1 failure.
   el.cents.textContent = tuned
-    ? 'in tune'
-    : `${centsOff > 0 ? '+' : '−'}${Math.abs(centsOff).toFixed(1)} ¢`;
+    ? '✓ in tune'
+    : `${centsOff > 0 ? '+' : '−'}${Math.abs(centsOff).toFixed(1)} ¢ ${centsOff > 0 ? 'sharp' : 'flat'}`;
   el.hz.textContent = `${freq.toFixed(2)} Hz · target ${target.freq.toFixed(2)} Hz`;
 
   for (const cell of el.strings.children) {

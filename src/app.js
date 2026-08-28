@@ -169,7 +169,7 @@ function renderLevel(now, elapsedSec) {
   el.levelFill.style.width = `${dbToPercent(state.levelDb)}%`;
   el.levelFill.dataset.hot = String(state.levelDb >= LEVEL_FLOOR_DB);
   el.levelPeak.style.left = `${dbToPercent(state.peakDb)}%`;
-  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.45' : '0';
+  el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.9' : '0';
   el.levelDb.textContent = audible ? `${state.levelDb.toFixed(0)} dB` : '—';
 
   // Reconnecting takes priority: the screen is frozen for a real reason and
@@ -296,9 +296,11 @@ function render() {
   el.body.dataset.tuned = String(tuned);
 
   el.note.innerHTML = `${target.label}<sub>${target.octave}</sub>`;
+  // The word (and the tick) carry the state without relying on colour: green
+  // note + green detent alone would be a WCAG 1.4.1 failure.
   el.cents.textContent = tuned
-    ? 'in tune'
-    : `${centsOff > 0 ? '+' : '−'}${Math.abs(centsOff).toFixed(1)} ¢`;
+    ? '✓ in tune'
+    : `${centsOff > 0 ? '+' : '−'}${Math.abs(centsOff).toFixed(1)} ¢ ${centsOff > 0 ? 'sharp' : 'flat'}`;
   el.hz.textContent = `${freq.toFixed(2)} Hz · target ${target.freq.toFixed(2)} Hz`;
 
   for (const cell of el.strings.children) {
