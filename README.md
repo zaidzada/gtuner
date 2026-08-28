@@ -6,9 +6,14 @@ calls — the whole thing is a handful of files plus a 1.8 KB WebAssembly module
 ## Run it
 
 ```sh
-python3 -m http.server 8000
-# open http://localhost:8000
+node tools/serve.mjs        # http://localhost:8000
 ```
+
+Use this rather than `python3 -m http.server` while working on it: it sends
+no-cache headers. Plain static servers don't, and browsers — Safari
+especially — will serve you a stale `index.html` or a stale `yin.wasm` after a
+rebuild, so you end up debugging code that isn't running. If you do use
+another server, hard-reload (⌘⇧R) after every change.
 
 It has to come over `http://` or `https://`, not `file://` — see
 [Deploying](#deploying) for why. Opening the file directly says so rather than
