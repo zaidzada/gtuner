@@ -31,6 +31,8 @@ const el = {
   levelPeak: document.getElementById('level-peak'),
   levelFloor: document.getElementById('level-floor'),
   levelDb: document.getElementById('level-db'),
+  levelTrack: document.querySelector('.level-track'),
+  diag: document.getElementById('diag'),
   tuning: document.getElementById('tuning'),
   a4: document.getElementById('a4'),
   a4up: document.getElementById('a4up'),
@@ -61,6 +63,9 @@ const state = {
   peakDb: -120,
   peakAt: 0,
   running: false,
+  recovering: null,         // reason string while the engine is reconnecting
+  showDiagnostics: new URLSearchParams(location.search).has('debug'),
+  frameMark: { count: 0, at: 0, perSecond: 0 },
 };
 
 // --- setup -----------------------------------------------------------------
@@ -154,6 +159,14 @@ function renderLevel(now, elapsedSec) {
   el.levelPeak.style.opacity = state.peakDb > LEVEL_MIN_DB ? '0.45' : '0';
   el.levelDb.textContent = audible ? `${state.levelDb.toFixed(0)} dB` : '—';
 
+  // Reconnecting takes priority: the screen is frozen for a real reason and
+  // saying so beats letting it look broken.
+  if (state.recovering) {
+    el.hint.dataset.show = 'true';
+    el.hint.textContent = 'Audio stopped — reconnecting…';
+    return;
+  }
+
   // Signal is arriving but nothing is being detected: say why.
   const starved = state.running
     && now - state.lastGoodAt > QUIET_HINT_AFTER_MS
@@ -164,6 +177,25 @@ function renderLevel(now, elapsedSec) {
       ? 'No signal — is the right microphone selected?'
       : 'Too quiet to detect — move closer to the mic.';
   }
+}
+
+/**
+ * Frames per second is the number that matters when something goes wrong:
+ * a healthy pipeline delivers ~43/s, and zero means capture has died even
+ * though the rest of the page looks fine.
+ */
+function renderDiagnostics(now) {
+  if (!state.showDiagnostics) return;
+  const mark = state.frameMark;
+  if (now - mark.at >= 1000) {
+    mark.perSecond = ((engine.frameCount - mark.count) * 1000) / (now - mark.at);
+    mark.count = engine.frameCount;
+    mark.at = now;
+  }
+  el.diag.textContent =
+    `${mark.perSecond.toFixed(0)} frames/s · ${engine.frameCount} total · ` +
+    `${engine.stallCount} stalls · ${engine.recoveryCount} recoveries · ` +
+    `${engine.context ? engine.context.state : '—'} @ ${engine.context ? (engine.context.sampleRate / 1000).toFixed(1) : '—'} kHz`;
 }
 
 function clearReadout() {
@@ -179,6 +211,7 @@ function render() {
   lastFrameAt = now;
 
   renderLevel(now, elapsedSec);
+  renderDiagnostics(now);
 
   const active = state.displayed !== null && now - state.lastGoodAt < HOLD_MS;
 
@@ -229,9 +262,12 @@ const engine = new TunerEngine({
   onResult,
   onStateChange(engineState, detail) {
     state.running = engineState === 'running';
+    state.recovering = engineState === 'recovering' ? (detail || 'reconnecting') : null;
     if (engineState === 'running') {
       el.overlay.hidden = true;
       state.lastGoodAt = performance.now();
+    } else if (engineState === 'recovering') {
+      // Leave the readout alone; the hint line explains what is happening.
     } else if (engineState === 'error') {
       el.overlay.hidden = false;
       el.start.textContent = 'Try again';
@@ -246,6 +282,12 @@ const engine = new TunerEngine({
 });
 
 el.start.addEventListener('click', () => engine.start());
+
+// Tap the level bar to show pipeline diagnostics (or load with ?debug).
+el.levelTrack.addEventListener('click', () => {
+  state.showDiagnostics = !state.showDiagnostics;
+  el.diag.hidden = !state.showDiagnostics;
+});
 
 if (location.protocol === 'file:') {
   el.status.textContent = 'Serve this over http:// — opening it straight from disk will not work.';
@@ -265,6 +307,7 @@ function nudgeA4(delta) {
 el.a4up.addEventListener('click', () => nudgeA4(1));
 el.a4down.addEventListener('click', () => nudgeA4(-1));
 
+el.diag.hidden = !state.showDiagnostics;
 buildTicks();
 buildTuningOptions();
 refreshTargets();

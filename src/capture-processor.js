@@ -25,8 +25,9 @@ class CaptureProcessor extends AudioWorkletProcessor {
       const data = event.data;
       if (data === 'stop') {
         this.running = false;
-      } else if (data && data.buffer instanceof ArrayBuffer) {
-        // A window came back from the Worker; reuse it.
+      } else if (data && data.buffer instanceof ArrayBuffer && data.buffer.byteLength) {
+        // A window came back from the Worker; reuse it. A detached buffer
+        // (byteLength 0) would throw on the next set() and kill the processor.
         if (this.pool.length < 4) this.pool.push(data);
       }
     };
@@ -47,13 +48,20 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
     if (this.sinceEmit >= HOP && this.filled >= FRAME) {
       this.sinceEmit = 0;
-      const out = this.pool.pop() || new Float32Array(FRAME);
-      // Linearize the ring, oldest sample first. this.idx is both the next
-      // write position and, once full, the oldest sample.
-      const head = FRAME - this.idx;
-      out.set(this.ring.subarray(this.idx), 0);
-      out.set(this.ring.subarray(0, this.idx), head);
-      this.port.postMessage(out, [out.buffer]);
+      // An exception thrown out of process() puts the processor into an error
+      // state that it never leaves — capture would stop for good. Nothing in
+      // here should throw, but the cost of being sure is one try/catch.
+      try {
+        const out = this.pool.pop() || new Float32Array(FRAME);
+        // Linearize the ring, oldest sample first. this.idx is both the next
+        // write position and, once full, the oldest sample.
+        const head = FRAME - this.idx;
+        out.set(this.ring.subarray(this.idx), 0);
+        out.set(this.ring.subarray(0, this.idx), head);
+        this.port.postMessage(out, [out.buffer]);
+      } catch {
+        this.pool.length = 0;   // drop anything suspect and carry on
+      }
     }
 
     return true;

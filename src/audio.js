@@ -8,6 +8,12 @@
 //            | result
 //          main thread -> onResult
 
+// If no window arrives for this long while running, the capture chain has
+// died. Windows normally arrive every ~23 ms, so this is a very quiet alarm.
+const STALL_MS = 1500;
+const WATCHDOG_INTERVAL_MS = 500;
+const MAX_RECOVERIES = 6;
+
 export class TunerEngine {
   /**
    * @param {object} options
@@ -25,11 +31,27 @@ export class TunerEngine {
     this.workerUrl = workerUrl;
     this.wasmUrl = wasmUrl;
     this.wasmBytes = wasmBytes;
+
     this.context = null;
     this.stream = null;
     this.node = null;
     this.worker = null;
     this.state = 'idle';
+
+    // Every node in the graph is held here on purpose. A
+    // MediaStreamAudioSourceNode that nothing references can be garbage
+    // collected out from under a running graph — the classic Web Audio
+    // failure where capture works for a few seconds and then silently stops.
+    this.source = null;
+    this.mute = null;
+
+    this.frameCount = 0;      // windows delivered by the worklet
+    this.resultCount = 0;     // results returned by the worker
+    this.lastFrameAt = 0;
+    this.stallCount = 0;
+    this.recoveryCount = 0;
+    this.watchdog = null;
+    this.recovering = false;
   }
 
   setState(state, detail) {
@@ -75,7 +97,18 @@ export class TunerEngine {
       return;
     }
 
+    this.watchTrack();
+
     this.context = new (window.AudioContext || window.webkitAudioContext)();
+    // Chrome can suspend a context and Safari can mark it "interrupted" (a
+    // phone call, another app taking the audio device). Neither fires an
+    // error — the graph just stops — so resume whenever it happens.
+    this.context.onstatechange = () => {
+      if (!this.context) return;
+      if (this.context.state === 'suspended' || this.context.state === 'interrupted') {
+        this.context.resume().catch(() => {});
+      }
+    };
     if (this.context.state === 'suspended') await this.context.resume();
 
     try {
@@ -109,44 +142,135 @@ export class TunerEngine {
       return;
     }
 
-    const source = this.context.createMediaStreamSource(this.stream);
+    this.buildGraph();
+
+    this.worker.onmessage = (event) => {
+      const msg = event.data;
+      if (msg.type !== 'result' && msg.type !== 'recycle') return;
+      // The buffer goes home first, no matter what the UI callback does. If a
+      // render error could swallow buffers, the pool would drain and the
+      // worklet would allocate on the audio thread forever after.
+      const frame = msg.frame;
+      try {
+        if (msg.type === 'result') {
+          this.resultCount++;
+          this.onResult(msg);
+        }
+      } finally {
+        if (this.node && frame && frame.buffer.byteLength) {
+          this.node.port.postMessage(frame, [frame.buffer]);
+        }
+      }
+    };
+
+    this.lastFrameAt = performance.now();
+    this.startWatchdog();
+    this.setState('running');
+  }
+
+  /** Wire mic -> worklet -> silent gain -> destination. */
+  buildGraph() {
+    this.source = this.context.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.context, 'capture-processor');
 
-    // Relay windows out to the worker, and recycled buffers back to the worklet.
     this.node.port.onmessage = (event) => {
       const frame = event.data;
+      this.frameCount++;
+      this.lastFrameAt = performance.now();
       this.worker.postMessage(
         { type: 'frame', frame, sampleRate: this.context.sampleRate },
         [frame.buffer],
       );
     };
 
-    this.worker.onmessage = (event) => {
-      const msg = event.data;
-      if (msg.type === 'result') {
-        this.onResult(msg);
-        this.node.port.postMessage(msg.frame, [msg.frame.buffer]);
-      } else if (msg.type === 'recycle') {
-        this.node.port.postMessage(msg.frame, [msg.frame.buffer]);
-      }
-    };
-
     // The graph only pulls nodes that reach the destination, so the worklet
     // has to be connected — but through a silent gain, or you get feedback.
-    const mute = this.context.createGain();
-    mute.gain.value = 0;
-    source.connect(this.node);
-    this.node.connect(mute);
-    mute.connect(this.context.destination);
+    this.mute = this.context.createGain();
+    this.mute.gain.value = 0;
+    this.source.connect(this.node);
+    this.node.connect(this.mute);
+    this.mute.connect(this.context.destination);
+  }
 
-    this.setState('running');
+  teardownGraph() {
+    for (const node of [this.source, this.node, this.mute]) {
+      try { node && node.disconnect(); } catch { /* already gone */ }
+    }
+    if (this.node) this.node.port.onmessage = null;
+    this.source = this.node = this.mute = null;
+  }
+
+  /** A microphone can be muted, stolen by another app, or unplugged. */
+  watchTrack() {
+    const track = this.stream && this.stream.getAudioTracks()[0];
+    if (!track) return;
+    track.onended = () => this.recover('the microphone was disconnected');
+    track.onmute = () => this.setState('running', 'muted');
+    track.onunmute = () => this.setState('running');
+  }
+
+  startWatchdog() {
+    this.stopWatchdog();
+    this.watchdog = setInterval(() => {
+      if (this.state !== 'running' || this.recovering) return;
+      if (performance.now() - this.lastFrameAt < STALL_MS) return;
+      this.stallCount++;
+      this.recover('the audio pipeline stopped delivering samples');
+    }, WATCHDOG_INTERVAL_MS);
+  }
+
+  stopWatchdog() {
+    if (this.watchdog !== null) { clearInterval(this.watchdog); this.watchdog = null; }
+  }
+
+  /**
+   * Rebuild whatever died. Cheapest repair first: relink the graph. If the
+   * microphone track itself is gone, go all the way back to getUserMedia.
+   */
+  async recover(reason) {
+    if (this.recovering || this.state === 'idle') return;
+    if (this.recoveryCount >= MAX_RECOVERIES) {
+      this.stopWatchdog();
+      this.setState('error', `Audio kept stopping (${reason}). Reload the page to try again.`);
+      return;
+    }
+    this.recovering = true;
+    this.recoveryCount++;
+    this.setState('recovering', reason);
+
+    try {
+      const track = this.stream && this.stream.getAudioTracks()[0];
+      const trackDead = !track || track.readyState === 'ended';
+
+      this.teardownGraph();
+
+      if (trackDead) {
+        if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+        });
+        this.watchTrack();
+      }
+
+      if (this.context.state !== 'running') await this.context.resume();
+      this.buildGraph();
+
+      this.lastFrameAt = performance.now();
+      this.setState('running');
+    } catch (err) {
+      this.setState('error', `Could not restart audio: ${err && err.message ? err.message : err}`);
+    } finally {
+      this.recovering = false;
+    }
   }
 
   async stop() {
-    if (this.node) { this.node.port.postMessage('stop'); this.node.disconnect(); this.node = null; }
+    this.stopWatchdog();
+    if (this.node) this.node.port.postMessage('stop');
+    this.teardownGraph();
     if (this.worker) { this.worker.terminate(); this.worker = null; }
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
-    if (this.context) { await this.context.close(); this.context = null; }
+    if (this.context) { this.context.onstatechange = null; await this.context.close(); this.context = null; }
     this.setState('idle');
   }
 }

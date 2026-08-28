@@ -128,6 +128,60 @@ for (const build of BUILDS) {
  }
 }
 
+// The capture chain can die under the app's feet — a garbage-collected source
+// node, a microphone taken by another application, a suspended context. The
+// watchdog has to notice and rebuild rather than leaving a frozen screen.
+// Severing source -> worklet reproduces exactly what that looks like.
+{
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME_PATH || undefined,
+    args: [
+      '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      `--use-file-for-fake-audio-capture=${dir}g3-intune.wav`,
+      '--autoplay-policy=no-user-gesture-required', '--no-sandbox',
+    ],
+  });
+  const problems = [];
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://localhost:${PORT}/index.html`);
+    await page.click('#start');
+    await page.waitForFunction(() => window.__tuner.engine.frameCount > 5, null, { timeout: 15000 });
+
+    await page.evaluate(() => window.__tuner.engine.source.disconnect());
+    const atBreak = await page.evaluate(() => window.__tuner.engine.frameCount);
+
+    await page.waitForTimeout(1000);
+    const duringStall = await page.evaluate(() => window.__tuner.engine.frameCount);
+    if (duringStall > atBreak) problems.push('severing the graph did not actually stop frames');
+
+    await page.waitForTimeout(2500);
+    const healed = await page.evaluate(() => ({
+      frames: window.__tuner.engine.frameCount,
+      stalls: window.__tuner.engine.stallCount,
+      recoveries: window.__tuner.engine.recoveryCount,
+    }));
+    if (healed.stalls < 1) problems.push('watchdog never registered a stall');
+    if (healed.recoveries < 1) problems.push('watchdog never attempted recovery');
+
+    await page.waitForTimeout(1200);
+    const flowing = await page.evaluate(() => window.__tuner.engine.frameCount);
+    if (flowing - healed.frames < 20) problems.push(`pipeline still dead after recovery (+${flowing - healed.frames} frames)`);
+
+    if (problems.length) failed++;
+    results.push({
+      build: 'watchdog', file: 'stall recovery', ok: problems.length === 0,
+      shown: problems.length ? 'did not recover' : 'detected + recovered',
+      expected: 'detected + recovered', error: NaN, problems,
+    });
+  } catch (err) {
+    failed++;
+    results.push({ build: 'watchdog', file: 'stall recovery', ok: false, shown: '?', expected: 'detected + recovered', error: NaN, problems: [String(err).split('\n')[0]] });
+  } finally {
+    await browser.close();
+  }
+}
+
 // A page opened from disk cannot load a blob-URL worklet (opaque origin), so
 // it must fail with the explanation rather than a raw browser error.
 {

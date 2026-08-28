@@ -152,6 +152,42 @@ levels are — a guitar reading 5% of full scale linearly is a perfectly usable
 If signal is arriving but nothing is being detected for a couple of seconds,
 the page says so rather than just sitting there.
 
+## When capture dies
+
+A Web Audio capture chain can stop for reasons the page never gets told about:
+a `MediaStreamAudioSourceNode` that nothing holds a reference to gets garbage
+collected mid-run, another application takes the microphone, the OS suspends
+the `AudioContext`, a USB interface is unplugged. In every case the graph just
+goes quiet — no error, no event — and the screen freezes on its last reading.
+
+Three defences, in order of how much they cost:
+
+1. **Every node is referenced.** `TunerEngine` holds `source`, `node` and
+   `mute` as fields. An unreferenced source node being collected out from
+   under a running graph is the classic version of this bug.
+2. **The context and track are watched.** `onstatechange` resumes a suspended
+   or interrupted context; `track.onended` triggers a full re-acquire.
+3. **A watchdog.** Windows arrive every ~23 ms, so if none arrives for 1.5 s
+   something is wrong whatever the cause. The engine rebuilds the graph — or
+   re-runs `getUserMedia` if the track itself is gone — and the page says
+   "reconnecting…" rather than looking broken. After six failed recoveries it
+   stops and asks you to reload, instead of thrashing forever.
+
+`test/e2e.mjs` verifies this by severing `source -> worklet` on a live page
+and asserting the watchdog notices and brings it back.
+
+### Diagnostics
+
+Tap the level bar (or load with `?debug`) for a live readout:
+
+```
+43 frames/s · 1832 total · 0 stalls · 0 recoveries · running @ 44.1 kHz
+```
+
+**Frames per second is the number that matters.** A healthy pipeline delivers
+about 43. Zero means capture has died even though the rest of the page looks
+fine, and the stall/recovery counters say whether the watchdog saw it.
+
 ## Tuning behaviour worth knowing
 
 - **String matching has 40 cents of hysteresis.** Without it the display

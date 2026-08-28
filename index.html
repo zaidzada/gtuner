@@ -115,6 +115,12 @@
     opacity: 0; transition: opacity .3s ease;
   }
   .hint[data-show="true"] { opacity: 1; }
+  .level-track { cursor: pointer; }
+  .diag {
+    font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+    text-align: center; letter-spacing: .02em;
+  }
+  .diag[hidden] { display: none; }
 
   /* --- footer ----------------------------------------------------------- */
   .controls {
@@ -177,6 +183,8 @@
       </div>
       <span class="level-db" id="level-db">&mdash;</span>
     </div>
+
+    <div class="diag" id="diag" hidden></div>
 
     <div class="controls">
       <select id="tuning" aria-label="Tuning"></select>
