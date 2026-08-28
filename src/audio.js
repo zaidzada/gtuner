@@ -178,7 +178,7 @@ export class TunerEngine {
       this.frameCount++;
       this.lastFrameAt = performance.now();
       this.worker.postMessage(
-        { type: 'frame', frame, sampleRate: this.context.sampleRate },
+        { type: 'frame', frame, sampleRate: this.context.sampleRate, sentAt: this.lastFrameAt },
         [frame.buffer],
       );
     };

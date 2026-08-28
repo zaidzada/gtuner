@@ -117,10 +117,13 @@
   .hint[data-show="true"] { opacity: 1; }
   .level-track { cursor: pointer; }
   .diag {
-    font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
-    text-align: center; letter-spacing: .02em;
+    font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--dim); margin: 0; padding: 12px 14px;
+    border: 1px solid var(--line); border-radius: 8px; background: #0e1116;
+    white-space: pre; overflow-x: auto;
   }
   .diag[hidden] { display: none; }
+  .diag b { color: #8b95a3; font-weight: 400; }
 
   /* --- footer ----------------------------------------------------------- */
   .controls {
@@ -184,7 +187,7 @@
       <span class="level-db" id="level-db">&mdash;</span>
     </div>
 
-    <div class="diag" id="diag" hidden></div>
+    <pre class="diag" id="diag" hidden></pre>
 
     <div class="controls">
       <select id="tuning" aria-label="Tuning"></select>

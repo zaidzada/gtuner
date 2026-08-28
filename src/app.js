@@ -16,7 +16,8 @@ const SMOOTHING = 0.25;       // needle easing per frame
 const LEVEL_MIN_DB = -80;     // left edge of the meter
 const LEVEL_FLOOR_DB = -70;   // below here detection gets unreliable
 const PEAK_FALL_DB_PER_SEC = 24;
-const QUIET_HINT_AFTER_MS = 2500;
+const QUIET_HINT_AFTER_MS = 3000;
+const SILENCE_DB = -90;       // below this there are no samples at all
 
 const el = {
   body: document.body,
@@ -64,8 +65,15 @@ const state = {
   peakAt: 0,
   running: false,
   recovering: null,         // reason string while the engine is reconnecting
-  showDiagnostics: new URLSearchParams(location.search).has('debug'),
-  frameMark: { count: 0, at: 0, perSecond: 0 },
+  everDetected: false,      // has this session ever found a note?
+  audioStartedAt: 0,
+  showDiagnostics:
+    new URLSearchParams(location.search).has('debug')
+    || store.get('debug', '0') === '1',
+  frameMark: { frames: 0, results: 0, at: 0, framesPerSec: 0, resultsPerSec: 0 },
+  last: null,               // most recent raw result, for the debug panel
+  detectMs: 0,              // smoothed
+  roundTripMs: 0,           // smoothed
 };
 
 // --- setup -----------------------------------------------------------------
@@ -118,6 +126,10 @@ function onResult(msg) {
   // The level meter updates on every frame, detected pitch or not — it is the
   // only thing that can tell you the microphone is working but too quiet.
   const now = performance.now();
+  state.last = msg;
+  // Exponential smoothing: raw per-frame timings jitter too much to read.
+  state.detectMs += ((msg.detectMs || 0) - state.detectMs) * 0.1;
+  if (msg.sentAt) state.roundTripMs += ((now - msg.sentAt) - state.roundTripMs) * 0.1;
   state.levelDb = msg.rms > 0 ? 20 * Math.log10(msg.rms) : -120;
   if (state.levelDb > state.peakDb) {
     state.peakDb = state.levelDb;
@@ -134,6 +146,7 @@ function onResult(msg) {
   const target = matchString(freq, state.targets, state.held);
   state.held = target;
   state.lastGoodAt = now;
+  state.everDetected = true;
   state.displayed = { target, centsOff: cents(freq, target.freq), freq };
 }
 
@@ -167,35 +180,79 @@ function renderLevel(now, elapsedSec) {
     return;
   }
 
-  // Signal is arriving but nothing is being detected: say why.
-  const starved = state.running
-    && now - state.lastGoodAt > QUIET_HINT_AFTER_MS
-    && state.peakDb < LEVEL_FLOOR_DB;
-  el.hint.dataset.show = String(starved);
-  if (starved) {
-    el.hint.textContent = state.peakDb < -95
+  // Hints are setup help, not a running commentary. Once the tuner has
+  // successfully read a note we know the microphone works, so silence after
+  // that means nothing is being played — which is a normal thing to do, not a
+  // problem to nag about. Only an installation that has never worked gets
+  // advice.
+  let hint = '';
+  if (state.running && !state.everDetected
+      && now - state.audioStartedAt > QUIET_HINT_AFTER_MS) {
+    hint = state.peakDb <= SILENCE_DB
       ? 'No signal — is the right microphone selected?'
-      : 'Too quiet to detect — move closer to the mic.';
+      : state.peakDb < LEVEL_FLOOR_DB
+        ? 'Too quiet to detect — move closer to the mic.'
+        : '';
   }
+  el.hint.dataset.show = String(hint !== '');
+  if (hint) el.hint.textContent = hint;
 }
 
 /**
- * Frames per second is the number that matters when something goes wrong:
- * a healthy pipeline delivers ~43/s, and zero means capture has died even
- * though the rest of the page looks fine.
+ * Debug panel. Hidden by default; toggled with the `d` key, by tapping the
+ * level bar, or with ?debug in the URL, and remembered between visits.
+ *
+ * Every line answers a different "where did it break" question:
+ *   pipeline - are windows still arriving at all? (~43/s when healthy; 0 means
+ *              capture died even though the page looks fine)
+ *   audio    - is the context actually running, and at what rate?
+ *   signal   - is sound reaching us, and is it periodic enough to be a note?
+ *   timing   - is detection keeping up, or is the worker falling behind?
+ *   pitch    - what came out, before and after smoothing
  */
+const pad = (label) => `<b>${label.padEnd(9)}</b>`;
+
 function renderDiagnostics(now) {
   if (!state.showDiagnostics) return;
+
   const mark = state.frameMark;
   if (now - mark.at >= 1000) {
-    mark.perSecond = ((engine.frameCount - mark.count) * 1000) / (now - mark.at);
-    mark.count = engine.frameCount;
+    const elapsed = now - mark.at;
+    mark.framesPerSec = ((engine.frameCount - mark.frames) * 1000) / elapsed;
+    mark.resultsPerSec = ((engine.resultCount - mark.results) * 1000) / elapsed;
+    mark.frames = engine.frameCount;
+    mark.results = engine.resultCount;
     mark.at = now;
   }
-  el.diag.textContent =
-    `${mark.perSecond.toFixed(0)} frames/s · ${engine.frameCount} total · ` +
-    `${engine.stallCount} stalls · ${engine.recoveryCount} recoveries · ` +
-    `${engine.context ? engine.context.state : '—'} @ ${engine.context ? (engine.context.sampleRate / 1000).toFixed(1) : '—'} kHz`;
+
+  const ctx = engine.context;
+  const last = state.last;
+  const shown = state.displayed;
+  const hop = mark.framesPerSec > 0 ? (1000 / mark.framesPerSec).toFixed(0) : '—';
+
+  el.diag.innerHTML = [
+    `${pad('pipeline')}${mark.framesPerSec.toFixed(0)} frames/s · ${mark.resultsPerSec.toFixed(0)} results/s · ` +
+      `${engine.frameCount} total`,
+    `${pad('audio')}${ctx ? ctx.state : '—'} · ${ctx ? (ctx.sampleRate / 1000).toFixed(1) : '—'} kHz · ` +
+      `4096-sample window every ${hop} ms`,
+    `${pad('signal')}${state.levelDb > -119 ? state.levelDb.toFixed(1) + ' dBFS' : 'silent'} · ` +
+      `peak ${state.peakDb > -119 ? state.peakDb.toFixed(1) : '—'} · ` +
+      `clarity ${last ? last.clarity.toFixed(3) : '—'}${last && !last.found ? ' (no pitch)' : ''}`,
+    `${pad('timing')}detect ${state.detectMs.toFixed(2)} ms · round trip ${state.roundTripMs.toFixed(1)} ms · ` +
+      `${(state.detectMs / (1000 / Math.max(mark.framesPerSec, 1)) * 100).toFixed(0)}% duty`,
+    `${pad('pitch')}${last && last.found ? last.freq.toFixed(3) + ' Hz raw' : '—'} · ` +
+      `${shown ? shown.freq.toFixed(3) + ' Hz median' : '—'} · ` +
+      `${shown ? shown.target.note + ' ' + (shown.centsOff >= 0 ? '+' : '') + shown.centsOff.toFixed(1) + ' ¢' : '—'}`,
+    `${pad('engine')}${engine.state}${state.recovering ? ' — ' + state.recovering : ''} · ` +
+      `${engine.stallCount} stalls · ${engine.recoveryCount} recoveries · ` +
+      `A4 ${state.a4} · ${TUNINGS[state.tuningKey].label}`,
+  ].join('\n');
+}
+
+function setDiagnostics(on) {
+  state.showDiagnostics = on;
+  el.diag.hidden = !on;
+  store.set('debug', on ? '1' : '0');
 }
 
 function clearReadout() {
@@ -266,6 +323,7 @@ const engine = new TunerEngine({
     if (engineState === 'running') {
       el.overlay.hidden = true;
       state.lastGoodAt = performance.now();
+      if (!state.audioStartedAt) state.audioStartedAt = performance.now();
     } else if (engineState === 'recovering') {
       // Leave the readout alone; the hint line explains what is happening.
     } else if (engineState === 'error') {
@@ -283,10 +341,12 @@ const engine = new TunerEngine({
 
 el.start.addEventListener('click', () => engine.start());
 
-// Tap the level bar to show pipeline diagnostics (or load with ?debug).
-el.levelTrack.addEventListener('click', () => {
-  state.showDiagnostics = !state.showDiagnostics;
-  el.diag.hidden = !state.showDiagnostics;
+// Debug panel: `d` key, tapping the level bar, or ?debug in the URL.
+el.levelTrack.addEventListener('click', () => setDiagnostics(!state.showDiagnostics));
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'd' || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)) return;
+  setDiagnostics(!state.showDiagnostics);
 });
 
 if (location.protocol === 'file:') {
@@ -307,7 +367,7 @@ function nudgeA4(delta) {
 el.a4up.addEventListener('click', () => nudgeA4(1));
 el.a4down.addEventListener('click', () => nudgeA4(-1));
 
-el.diag.hidden = !state.showDiagnostics;
+setDiagnostics(state.showDiagnostics);
 buildTicks();
 buildTuningOptions();
 refreshTargets();

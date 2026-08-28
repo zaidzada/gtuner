@@ -52,7 +52,9 @@ self.onmessage = async (event) => {
     inputView.set(frame.subarray(0, n));
 
     // gate 0 = use the module's silence floor; loudness must not gate real notes.
+    const startedAt = performance.now();
     const found = exports_.detect(n, msg.sampleRate, 0.15, 0);
+    const detectMs = performance.now() - startedAt;
 
     self.postMessage({
       type: 'result',
@@ -60,6 +62,8 @@ self.onmessage = async (event) => {
       freq: outputView[0],
       clarity: outputView[1],
       rms: outputView[2],
+      detectMs,
+      sentAt: msg.sentAt,          // lets the page measure the round trip
       frame,                       // hand the buffer back for reuse
     }, [frame.buffer]);
   }

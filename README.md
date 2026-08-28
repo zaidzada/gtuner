@@ -176,17 +176,31 @@ Three defences, in order of how much they cost:
 `test/e2e.mjs` verifies this by severing `source -> worklet` on a live page
 and asserting the watchdog notices and brings it back.
 
-### Diagnostics
+### Debug panel
 
-Tap the level bar (or load with `?debug`) for a live readout:
+Hidden by default. Press **`d`**, tap the level bar, or load with `?debug`.
+The choice is remembered between visits.
 
 ```
-43 frames/s · 1832 total · 0 stalls · 0 recoveries · running @ 44.1 kHz
+pipeline  43 frames/s · 43 results/s · 1832 total
+audio     running · 44.1 kHz · 4096-sample window every 23 ms
+signal    -14.6 dBFS · peak -14.2 · clarity 1.000
+timing    detect 4.06 ms · round trip 7.5 ms · 18% duty
+pitch     195.999 Hz raw · 196.000 Hz median · G3 +0.0 ¢
+engine    running · 0 stalls · 0 recoveries · A4 440 · Standard
 ```
 
-**Frames per second is the number that matters.** A healthy pipeline delivers
-about 43. Zero means capture has died even though the rest of the page looks
-fine, and the stall/recovery counters say whether the watchdog saw it.
+Each line isolates a different stage, so a fault can be placed rather than
+guessed at:
+
+| Line | Answers |
+| --- | --- |
+| `pipeline` | Are windows arriving at all? ~43/s is healthy. **Zero means capture died** even though the page looks fine. If `results/s` trails `frames/s`, the worker is falling behind. |
+| `audio` | Is the context actually running, and at what rate? `suspended` or `interrupted` explains a freeze on its own. |
+| `signal` | Is sound reaching us (`dBFS`), and is it periodic enough to be a note (`clarity`)? Loud but low clarity means noise, not a string. |
+| `timing` | Is detection keeping up? `detect` should sit near 4 ms and duty well under 100%. |
+| `pitch` | `raw` is one window's estimate, `median` is after outlier rejection. A raw value jumping around a steady median is normal; both jumping is not. |
+| `engine` | Current state, and whether the watchdog has had to step in. |
 
 ## Tuning behaviour worth knowing
 
